@@ -1,0 +1,153 @@
+package edu.csulb.cecs327.chord;
+
+import java.rmi.*;
+import java.util.*;
+import java.io.*;
+import java.math.BigInteger;
+import java.security.*;
+import java.nio.file.*;
+
+/**
+ * Class represents a user who uses a Chord to communicate
+ * @author Jared Coleman
+ * @version 1.01 2017-16-03
+ */
+public class ChordUser {
+   private int port; //local port for user's Chord node
+
+   /**
+    * Provides hash code for a String to be used as GUID
+    * @param objectName String to hash
+    * @return hash code
+    */
+   private long md5(String objectName) {
+      try {
+         MessageDigest m = MessageDigest.getInstance("MD5");
+         m.reset();
+         m.update(objectName.getBytes());
+         BigInteger bigInt = new BigInteger(1,m.digest());
+         return Math.abs(bigInt.longValue());
+      } catch(NoSuchAlgorithmException e) {
+         e.printStackTrace();
+      }
+      return 0;
+   }
+
+   /**
+    * Only provided constructor for ChordUser\n
+    * Creates a simple user interface for a user to write, read, and delete files from p2p ring
+    * @param p 
+    */
+   public ChordUser(int p) {
+      this.port = p;
+
+      Timer timer1 = new Timer();
+      timer1.scheduleAtFixedRate(new TimerTask() {
+         @Override
+         public void run() {
+            try {
+               long guid = md5("" + port);
+               Chord chord = new Chord(port, guid);
+               
+               try {
+                  Files.createDirectories(Paths.get(guid+"/repository"));
+               } catch(IOException e) {
+                  e.printStackTrace();
+               }
+               System.out.println("Usage: \n\tjoin <ip> <port>\n\twrite <file> "
+                       + "(the file must be an integer stored in the working directory, i.e, ./"+guid+"/file");
+               System.out.println("\tread <file>\n\tdelete <file>\n\tprint");
+
+               Scanner scan= new Scanner(System.in);
+               String delims = "[ ]+";
+               while (true) {
+                  String text= scan.nextLine();
+                  String[] tokens = text.split(delims);
+                  if (tokens[0].equals("join") && tokens.length == 3) {
+                     try {
+                        int portToConnect = Integer.parseInt(tokens[2]);
+                        if(portToConnect != port) {
+                           chord.joinRing(tokens[1], portToConnect);
+                        }
+                     } catch (IOException e) {
+                        e.printStackTrace();
+                     }
+                  } else if (tokens[0].equals("print")) {
+                     chord.print();
+                  } else if (tokens[0].equals("write") && tokens.length == 2) {
+                     try {
+                        String path;
+                        String fileName = tokens[1];
+                        long guidObject = md5(fileName);
+                        path = "./" +  guid + "/" + fileName; // path to file
+                        FileStream file = new FileStream(path);
+                        ChordMessageInterface peer = chord.locateSuccessor(guidObject);
+                        peer.put(guidObject, file); // put file into ring
+                     } catch (IOException e) {
+                        System.out.println("Invalid File!");
+                     }
+                  } else if (tokens[0].equals("read") && tokens.length == 2) {
+                     InputStream in = null;
+                     FileOutputStream out;
+                     String fileName = tokens[1];
+                     long guidObject = md5(fileName);
+                     try {
+                        ChordMessageInterface peer = chord.locateSuccessor(guidObject);
+                        in = peer.get(guidObject);
+                        if(in != null) {
+                           String path = "./" +  guid + "/" + fileName;
+                           out = new FileOutputStream(path);
+                           while (in.available() > 0)
+                              out.write(in.read());
+                           out.close();
+                        }
+                     } catch (IOException ex) {
+                        System.out.println(fileName + " does not exist");
+                     } finally {
+                        try {
+                           if(in != null) in.close();
+                        } catch (IOException ex) {
+                           ex.printStackTrace();
+                        }
+                     }
+                  } else if  (tokens[0].equals("delete") && tokens.length == 2) {
+                     InputStream in = null;
+                     String fileName = tokens[1];
+                     long guidObject = md5(fileName);
+                     try {
+                        ChordMessageInterface peer = chord.locateSuccessor(guidObject);
+                        peer.delete(guidObject);
+                     } catch (IOException ex) {
+                        System.out.println(fileName + " does not exist");
+                     } finally {
+                        try {
+                           if(in != null) in.close();
+                        } catch (IOException ex) {
+                           ex.printStackTrace();
+                        }
+                     }
+                  } else if (tokens[0].equals("leave")) {
+                     chord.leave();
+                  }
+               }
+            } catch(RemoteException e) {
+               e.printStackTrace();
+            } catch (IOException e) {
+               e.printStackTrace();
+            }
+         }
+      }, 1000, 1000);
+   }
+
+   static public void main(String args[]) {
+      if (args.length < 1 ) {
+         throw new IllegalArgumentException("Parameter: <port>");
+      }
+      try {
+         ChordUser chordUser = new ChordUser(Integer.parseInt(args[0]));
+      } catch (Exception e) {
+         e.printStackTrace();
+         System.exit(1);
+      }
+   } 
+}
